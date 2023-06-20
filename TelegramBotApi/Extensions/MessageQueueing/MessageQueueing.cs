@@ -70,69 +70,78 @@ namespace TelegramBotApi.Extensions.MessageQueueing
 
         private static void MessageQueue(this TelegramBot Bot)
         {
-            while (Bot.IsMessageQueueing)
+            try
             {
-                var chatIds = Bot._messageQueue.Keys.ToList().Where(x => !Bot._messageQueueTimeout.ContainsKey(x));
-                foreach (var chatId in chatIds)
+                while (Bot.IsMessageQueueing)
                 {
-                    var queue = Bot._messageQueue[chatId];
-                    string final = "";
-                    bool byteMax = false;
-                    int i = 0;
-
-                    bool disableWebPagePreview = false;
-                    bool disableNotification = false;
-                    int replyToMessageId = -1;
-                    ReplyMarkupBase replyMarkup = null;
-
-                    while (!byteMax && queue.Count > 0 && (Bot._messageQueueMerging || i == 0))
+                    var chatIds = Bot._messageQueue.Keys.ToList().Where(x => !Bot._messageQueueTimeout.ContainsKey(x));
+                    foreach (var chatId in chatIds)
                     {
-                        i++;
-                        var m = queue.Peek();
-                        if (i > 1 &&
-                            ((replyToMessageId != -1 || m.ReplyToMessageId != -1) ||
-                            replyMarkup != null || m.ReplyMarkup != null))
-                            break;
+                        var queue = Bot._messageQueue[chatId];
+                        if (queue == null) continue;
+                        string final = "";
+                        bool byteMax = false;
+                        int i = 0;
 
-                        var temp = final + m.Text + Environment.NewLine + Environment.NewLine;
+                        bool disableWebPagePreview = false;
+                        bool disableNotification = false;
+                        int replyToMessageId = -1;
+                        ReplyMarkupBase replyMarkup = null;
 
-                        if (Encoding.UTF8.GetByteCount(temp) > 512)
+                        while (!byteMax && queue.Count > 0 && (Bot._messageQueueMerging || i == 0))
                         {
-                            if (i > 1)
+                            i++;
+                            var m = queue.Peek();
+                            if(m == null) continue;
+                            if (i > 1 &&
+                                ((replyToMessageId != -1 || m.ReplyToMessageId != -1) ||
+                                replyMarkup != null || m.ReplyMarkup != null))
+                                break;
+
+                            var temp = final + m.Text + Environment.NewLine + Environment.NewLine;
+
+                            if (Encoding.UTF8.GetByteCount(temp) > 512)
                             {
-                                break; // we already have at least one message and yet it's below 512 bytes, so send that and keep this message for the next time.
+                                if (i > 1)
+                                {
+                                    break; // we already have at least one message and yet it's below 512 bytes, so send that and keep this message for the next time.
+                                }
+                                else
+                                {
+                                    Bot._messageQueueTimeout.Add(chatId, 3); // this is the first message and it's over 512 bytes, so send it and add some additional timeout.
+                                    byteMax = true;
+                                }
                             }
-                            else
-                            {
-                                Bot._messageQueueTimeout.Add(chatId, 3); // this is the first message and it's over 512 bytes, so send it and add some additional timeout.
-                                byteMax = true;
-                            }
+                            queue.Dequeue(); //remove the message, we are sending it.
+                            final += m.Text + Environment.NewLine + Environment.NewLine;
+                            disableWebPagePreview = m.DisableWebPagePreview;
+                            disableNotification = m.DisableNotification;
+                            replyToMessageId = m.ReplyToMessageId;
+                            replyMarkup = m.ReplyMarkup;
                         }
-                        queue.Dequeue(); //remove the message, we are sending it.
-                        final += m.Text + Environment.NewLine + Environment.NewLine;
-                        disableWebPagePreview = m.DisableWebPagePreview;
-                        disableNotification = m.DisableNotification;
-                        replyToMessageId = m.ReplyToMessageId;
-                        replyMarkup = m.ReplyMarkup;
+
+                        if (!Bot.IsMessageQueueing) return;
+
+                        if (!string.IsNullOrEmpty(final))
+                        {
+                            Bot.SendMessage(chatId, final, Bot._messageQueueParseMode, disableWebPagePreview, disableNotification, replyToMessageId, replyMarkup);
+                        }
+
+                        if (queue.Count == 0) Bot._messageQueue.Remove(chatId);
                     }
-
                     if (!Bot.IsMessageQueueing) return;
-
-                    if (!string.IsNullOrEmpty(final))
+                    foreach (var timeout in Bot._messageQueueTimeout.Keys.ToList())
                     {
-                        Bot.SendMessage(chatId, final, Bot._messageQueueParseMode, disableWebPagePreview, disableNotification, replyToMessageId, replyMarkup);
+                        if (!Bot.IsMessageQueueing) return;
+                        Bot._messageQueueTimeout[timeout]--;
+                        if (Bot._messageQueueTimeout[timeout] == 0) Bot._messageQueueTimeout.Remove(timeout);
                     }
-
-                    if (queue.Count == 0) Bot._messageQueue.Remove(chatId);
+                    Thread.Sleep(4000);
                 }
-                if (!Bot.IsMessageQueueing) return;
-                foreach (var timeout in Bot._messageQueueTimeout.Keys.ToList())
-                {
-                    if (!Bot.IsMessageQueueing) return;
-                    Bot._messageQueueTimeout[timeout]--;
-                    if (Bot._messageQueueTimeout[timeout] == 0) Bot._messageQueueTimeout.Remove(timeout);
-                }
-                Thread.Sleep(4000);
+            }
+            catch (Exception)
+            {
+                
             }
         }
     }
